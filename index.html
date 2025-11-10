@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CalCute — 실시간 칼로리 조회 연동</title>
+<style>
+:root{
+  --bg:#f3fff9; --card:#fff; --mint:#9ee6cf; --mint-2:#7fdac1; --accent:#2f675e; --muted:#6b8b7a; --shadow:rgba(43,74,63,0.08);
+}
+*{box-sizing:border-box;}
+body{margin:0;font-family:'Nunito',system-ui,-apple-system; background:var(--bg); color:var(--accent); padding:20px;}
+.wrap{max-width:1000px;margin:auto;background:linear-gradient(180deg,#ffffff,#f7fffb);border-radius:18px;padding:18px;box-shadow:0 12px 30px var(--shadow);position:relative;}
+header{display:flex;align-items:center;gap:14px;}
+.logo{background:linear-gradient(135deg,var(--mint),var(--mint-2));padding:12px 18px;border-radius:14px;color:#053827;font-weight:800;font-size:20px;box-shadow:0 6px 18px rgba(47,103,94,0.12);}
+h1{margin:0;font-size:20px;}
+p.lead{margin:2px 0 0;color:var(--muted);}
+.controls{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;}
+input[type=text], input[type=number], select{padding:6px;border-radius:8px;border:1px solid #e6f6ef;}
+button.primary{background:var(--mint);border:0;padding:6px 12px;border-radius:10px;color:#053827;font-weight:700;cursor:pointer;}
+button.ghost{background:transparent;border:1px solid #d7f0e8;padding:6px 10px;border-radius:8px;color:var(--accent);cursor:pointer;}
+.day-plan{margin-top:18px;background:#fff;padding:14px;border-radius:12px;box-shadow:0 8px 20px rgba(15,30,25,0.04);}
+.meal-list{margin-top:6px;}
+.meal-item{display:flex;align-items:center;gap:6px;padding:4px;border:1px dashed #e6f6ef;border-radius:8px;margin-top:4px;}
+.meal-item .name{flex:1;}
+.summary{margin-top:10px;font-weight:700;}
+canvas{margin-top:20px;background:#fff;border-radius:12px;padding:10px;box-shadow:0 8px 20px rgba(0,0,0,0.05);}
+.cat{position:absolute;right:18px;bottom:18px;width:110px;height:110px;background:url('https://cdn-icons-png.flaticon.com/512/616/616408.png') no-repeat center/contain;opacity:0.95;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="logo">CalCute</div>
+  <div>
+    <h1>실시간 칼로리 조회 연동</h1>
+    <p class="lead">음식명을 입력하면 USDA API에서 칼로리 정보를 받아와서 식단에 반영해요 🐱💚</p>
+  </div>
+</header>
+
+<div class="controls">
+  <label>요일:</label>
+  <select id="daySelect">
+    <option value="0">Day 1</option>
+    <option value="1">Day 2</option>
+    <option value="2">Day 3</option>
+    <option value="3">Day 4</option>
+    <option value="4">Day 5</option>
+    <option value="5">Day 6</option>
+    <option value="6">Day 7</option>
+  </select>
+  <label>식사:</label>
+  <select id="mealSelect">
+    <option value="아침">아침</option>
+    <option value="점심">점심</option>
+    <option value="저녁">저녁</option>
+  </select>
+  <input id="foodSearch" type="text" placeholder="음식명 입력 (예: banana, rice)">
+  <button class="primary" id="addFoodBtn">추가 및 조회</button>
+  <button class="ghost" id="saveBtn">저장</button>
+  <button class="ghost" id="loadBtn">불러오기</button>
+</div>
+
+<div id="weekPlan"></div>
+<div class="summary" id="weeklySummary">주간 총 칼로리: 0 kcal</div>
+
+<canvas id="calChart" width="900" height="250"></canvas>
+
+<div class="cat"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const API_KEY = 'YOUR_API_KEY_HERE';  // API 키 입력
+const BASE_URL = 'https://api.nal.usda.gov/fdc/v1';
+
+let FOOD_DB = [];
+let week = [];
+for(let i=0;i<7;i++){
+  week.push({day:`Day ${i+1}`, meals:{아침:[], 점심:[], 저녁:[]}});
+}
+
+function searchFoodAPI(query){
+  return fetch(`${BASE_URL}/foods/search?api_key=${API_KEY}&query=${encodeURIComponent(query)}&pageSize=1`)
+    .then(res=>res.json())
+    .then(data=>{
+      if(data.foods && data.foods.length>0){
+        const food = data.foods[0];
+        return fetch(`${BASE_URL}/food/${food.fdcId}?api_key=${API_KEY}`)
+          .then(res2=>res2.json())
+          .then(detail=>{
+            const nutrients = detail.foodNutrients;
+            const kcalObj = nutrients.find(n=>n.name.toLowerCase().includes('energy')) || {amount:0};
+            return {name: detail.description, kcal: kcalObj.amount};
+          });
+      } else {
+        throw new Error('음식 검색 결과 없음');
+      }
+    });
+}
+
+function renderWeek(){
+  const container = document.getElementById('weekPlan');
+  container.innerHTML='';
+  week.forEach((dayObj, dayIdx)=>{
+    const dayDiv = document.createElement('div');
+    dayDiv.className='day-plan';
+    dayDiv.innerHTML=`<h3>${dayObj.day}</h3>`;
+    ['아침','점심','저녁'].forEach(mealName=>{
+      const mealDiv = document.createElement('div');
+      mealDiv.innerHTML=`<b>${mealName}</b><div class="meal-list" id="mealList-${dayIdx}-${mealName}"></div>`;
+      dayDiv.appendChild(mealDiv);
+      renderMealList(dayIdx, mealName);
+    });
+    container.appendChild(dayDiv);
+  });
+  updateWeeklySummary();
+  drawChart();
+}
+
+function renderMealList(dayIdx, mealName){
+  const listDiv = document.getElementById(`mealList-${dayIdx}-${mealName}`);
+  listDiv.innerHTML='';
+  week[dayIdx].meals[mealName].forEach((m,i)=>{
+    const itemDiv = document.createElement('div');
+    itemDiv.className='meal-item';
+    itemDiv.innerHTML=`
+      <span class="name">${m.name}</span>
+      <input type="number" data-day="${dayIdx}" data-meal="${mealName}" data-idx="${i}" value="${m.qty}" /> g
+      <span>${Math.round(m.kcal*m.qty/100)} kcal</span>
+      <button class="ghost" data-day="${dayIdx}" data-meal="${mealName}" data-idx="${i}">삭제</button>
+    `;
+    listDiv.appendChild(itemDiv);
+  });
+
+  listDiv.querySelectorAll('input[type=number]').forEach(inp=>{
+    inp.addEventListener('change', e=>{
+      const d = e.target.dataset.day;
+      const meal = e.target.dataset.meal;
+      const idx = e.target.dataset.idx;
+      week[d].meals[meal][idx].qty = Number(e.target.value)||0;
+      renderMealList(d, meal);
+    });
+  });
+  
+  listDiv.querySelectorAll('button').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      const d = e.target.dataset.day;
+      const meal = e.target.dataset.meal;
+      const idx = e.target.dataset.idx;
+      week[d].meals[meal].splice(idx,1);
+      renderMealList(d, meal);
+    });
+  });
+}
+
+document.getElementById('addFoodBtn').addEventListener('click', ()=>{
+  const dayIdx = Number(document.getElementById('daySelect').value);
+  const meal = document.getElementById('mealSelect').value;
+  const query = document.getElementById('foodSearch').value.trim();
+  if(!query) return alert('음식명을 입력해주세요.');
+
+  searchFoodAPI(query)
+    .then(food => {
+      week[dayIdx].meals[meal].push({...food, qty:100});
+      renderWeek();
+    })
+    .catch(err=>{
+      alert('칼로리 조회 실패: '+err.message);
+    });
+  document.getElementById('foodSearch').value='';
+});
+
+function updateWeeklySummary(){
+  let total=0;
+  week.forEach(day=>{
+    ['아침','점심','저녁'].forEach(meal=>{
+      day.meals[meal].forEach(f=>total+=f.kcal*f.qty/100);
+    });
+  });
+  document.getElementById('weeklySummary').textContent = `주간 총 칼로리: ${Math.round(total)} kcal`;
+}
+
+function drawChart(){
+  const ctx = document.getElementById('calChart').getContext('2d');
+  const labels = week.map(d=>d.day);
+  const data = week.map(day=>{
+    let sum=0;
+    ['아침','점심','저녁'].forEach(meal=>{
+      day.meals[meal].forEach(f=>sum+=f.kcal*f.qty/100);
+    });
+    return Math.round(sum);
+  });
+  if(window.myChart) window.myChart.destroy();
+  window.myChart = new Chart(ctx,{
+    type:'bar',
+    data:{labels:labels,datasets:[{label:'일별 총 칼로리(kcal)', data:data, backgroundColor:'#7fdac1'}]},
+    options:{responsive:true, plugins:{legend:{display:false}}}
+  });
+}
+
+// 저장/불러오기
+document.getElementById('saveBtn').addEventListener('click', ()=>{
+  localStorage.setItem('weekPlan', JSON.stringify(week));
+  alert('주간 식단 저장 완료!');
+});
+document.getElementById('loadBtn').addEventListener('click', ()=>{
+  const data = localStorage.getItem('weekPlan');
+  if(data){
+    week = JSON.parse(data);
+    renderWeek();
+  } else alert('저장된 데이터가 없습니다.');
+});
+
+// 초기 렌더링
+renderWeek();
+</script>
+</body>
+</html>
